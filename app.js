@@ -132,7 +132,7 @@ function renderUserSelection() {
         gap:10px;
         margin-top:24px;
       ">
-        ${state.users.map((u) => `
+        ${state.users.map((u,i) => `
           <button
             class="btn secondary"
             style="
@@ -140,7 +140,7 @@ function renderUserSelection() {
               text-align:left;
               font-size:16px;
             "
-            onclick="selectUser('${u.id}')"
+            onclick="selectUser(${i}')"
           >
             ${esc(u.name)}
           </button>
