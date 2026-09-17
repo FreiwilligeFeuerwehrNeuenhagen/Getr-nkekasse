@@ -115,6 +115,41 @@ async function refreshBookings() {
   if (error) throw error;
   state.bookings = data || [];
 }
+function renderUserSelection() {
+  document.querySelector('#app').innerHTML = `
+    <main class="shell">
+      <div class="brand">
+        GETRÄNKE<span>KASSE</span>
+      </div>
+
+      <div class="sub">
+        Benutzer auswählen
+      </div>
+
+      <div style="
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+        gap:10px;
+        margin-top:24px;
+      ">
+        ${state.users.map((u) => `
+          <button
+            class="btn secondary"
+            style="
+              padding:16px;
+              text-align:left;
+              font-size:16px;
+            "
+            onclick="selectUser('${u.id}')"
+          >
+            ${esc(u.name)}
+          </button>
+        `).join('')}
+      </div>
+    </main>
+  `;
+}
+
 function render() {
   // Noch kein Benutzer gewählt
   if (online && !state.user) {
