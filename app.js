@@ -222,7 +222,8 @@ function render() {
             }
           </div>
         `
-        : `
+        : state.tab === 'account'
+        ? '
           <div style="
             display:flex;
             justify-content:flex-end;
@@ -339,7 +340,17 @@ function render() {
             </div>
           </div>
         `
-      }
+    : state.tab === 'admin'
+    ? `
+      <div class="section">
+        <h2>Admin</h2>
+        <div class="tiny">
+          Hier entsteht die Verwaltung der Getränkekasse.
+        </div>
+      </div>
+    `
+    : ''
+    }
     </main>
     <nav class="nav">
       <div class="navin">
@@ -357,6 +368,15 @@ function render() {
           <b>👤</b>
           <small>Konto</small>
         </button>
+        ${state.user && state.user.name === 'Julien Ehrlich' ? `
+  <button
+    class="${state.tab === 'admin' ? 'active' : ''}"
+    onclick="tab('admin')"
+  >
+    <b>⚙️</b>
+    <small>Admin</small>
+  </button>
+` : ''}
       </div>
     </nav>
     ${modal || ''}
