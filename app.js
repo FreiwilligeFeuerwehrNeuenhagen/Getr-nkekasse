@@ -756,15 +756,50 @@ function openPaypal() {
    GETRÄNK BUCHEN
 ========================= */
 
-async function book(id) {
+function book(id) {
   if (!state.user) return;
-
   const drink = state.drinks.find(
     item => String(item.id) === String(id)
   );
-
   if (!drink) return;
-
+  modal = `
+    <div class="modal-wrap">
+      <div class="modal booking-confirm">
+        <div class="confirm-icon">
+          ${esc(drink.icon || '🥤')}
+        </div>
+        <h3>${esc(drink.name)} buchen?</h3>
+        <div class="confirm-price">
+          ${euro(drink.price)}
+        </div>
+        <p>
+          Möchtest du dieses Getränk wirklich buchen?
+        </p>
+        <div class="modal-actions">
+          <button
+            class="secondary"
+            onclick="closeModal()"
+          >
+            Abbrechen
+          </button>
+          <button
+            onclick="confirmBooking('${drink.id}')"
+          >
+            Buchen
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  render();
+}
+async function confirmBooking(id) {
+  if (!state.user) return;
+  const drink = state.drinks.find(
+    item => String(item.id) === String(id)
+  );
+  if (!drink) return;
+  modal = null;
   if (!online) {
     state.bookings.unshift({
       id: crypto.randomUUID(),
@@ -775,11 +810,9 @@ async function book(id) {
       created_at: new Date().toISOString(),
       cancelled_at: null
     });
-
     showToast(`${drink.name} gebucht`);
     return;
   }
-
   const { error } = await db
     .from('bookings')
     .insert({
@@ -788,17 +821,14 @@ async function book(id) {
       drink_name: drink.name,
       price: drink.price
     });
-
   if (error) {
     console.error(error);
     showToast('Buchung fehlgeschlagen');
     return;
   }
-
   await loadUserAccount();
   showToast(`${drink.name} gebucht`);
 }
-
 function canUndo(booking) {
   if (
     !booking.created_at ||
