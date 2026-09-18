@@ -24,13 +24,15 @@ const db = online
 let state = {
   screen: 'users',
   tab: 'drinks',
+  adminTab: 'accounts',
   drinks: [],
   bookings: [],
   users: [],
   user: null,
   pinSet: false,
-  unlocked: false,
-  admin: false
+  adminUnlocked: false,
+  adminBookings: [],
+  settlements: []
 };
 let modal = null;
 let toast = '';
@@ -62,6 +64,28 @@ function showToast(text) {
     render();
   }, 1800);
 }
+function initials(name) {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (
+    parts[0].charAt(0) +
+    parts[parts.length - 1].charAt(0)
+  ).toUpperCase();
+}
+function firstName(name) {
+  return String(name || '').trim().split(/\s+/)[0] || '';
+}
+function formatDate(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleString('de-DE', {
+    dateStyle: 'short',
+    timeStyle: 'short'
+  });
+}
 async function init() {
   if (!online) {
     state.drinks = FALLBACK_DRINKS.map((d, i) => ({
@@ -74,8 +98,10 @@ async function init() {
     render();
     return;
   }
-  await loadUsers();
-  await loadDrinks();
+  await Promise.all([
+    loadUsers(),
+    loadDrinks()
+  ]);
   render();
 }
 async function loadUsers() {
@@ -85,13 +111,12 @@ async function loadUsers() {
     .order('name');
   if (error) {
     console.error(error);
-    showToast('Benutzer konnten nicht geladen werden');
     return;
   }
   state.users = data || [];
 }
 async function loadDrinks() {
-  let { data, error } = await db
+  const { data, error } = await db
     .from('drinks')
     .select('*')
     .order('name');
@@ -114,23 +139,61 @@ async function loadBookings() {
   }
   state.bookings = data || [];
 }
+async function loadAdminData() {
+  const [
+    bookingsResult,
+    settlementsResult
+  ] = await Promise.all([
+    db.from('bookings')
+      .select('*')
+      .order('created_at', { ascending: false }),
+    db.from('settlements')
+      .select('*')
+      .order('settled_at', { ascending: false })
+  ]);
+  if (bookingsResult.error) {
+    console.error(bookingsResult.error);
+  } else {
+    state.adminBookings = bookingsResult.data || [];
+  }
+  if (settlementsResult.error) {
+    console.error(settlementsResult.error);
+  } else {
+    state.settlements = settlementsResult.data || [];
+  }
+}
+function openBookings(bookings = state.bookings) {
+  return bookings.filter(
+    b => !b.cancelled_at && !b.settlement_id
+  );
+}
 function balance() {
-  return state.bookings
-    .filter(b => !b.cancelled_at)
-    .reduce((sum, b) => sum + Number(b.price || 0), 0);
+  return openBookings().reduce(
+    (sum, b) => sum + Number(b.price || 0),
+    0
+  );
 }
 function appShell(content) {
   return `
     <main class="shell">
-      <div class="brand">
-        GETRÄNKE<span>KASSE</span>
-      </div>
-      <div class="subtitle">
-        Einfach nehmen. Einfach buchen.
-        ${online ? '<span class="online">● synchronisiert</span>' : ''}
-      </div>
+      <header class="main-header">
+        <div class="main-title">
+          GETRÄNKE<span>LISTE</span>
+        </div>
+        <div class="main-subtitle">
+          Freiwillige Feuerwehr Neuenhagen
+          ${
+            online
+              ? '<span class="online-dot">● synchronisiert</span>'
+              : ''
+          }
+        </div>
+      </header>
       ${content}
-      ${toast ? `<div class="toast">${esc(toast)}</div>` : ''}
+      ${toast
+        ? `<div class="toast">${esc(toast)}</div>`
+        : ''
+      }
       ${modal || ''}
     </main>
   `;
@@ -152,43 +215,56 @@ function render() {
   }
   root.innerHTML = appShell(accountApp());
 }
+/* =========================
+   BENUTZERAUSWAHL
+========================= */
 function userScreen() {
-  const users = state.users
-    .map(u => `
-      <button class="user-card" onclick="selectUser('${u.id}')">
+  const cards = state.users.map(u => `
+    <button
+      class="person-card"
+      onclick="selectUser('${u.id}')"
+      data-name="${esc(u.name.toLowerCase())}"
+    >
+      <span class="person-initials">
+        ${esc(initials(u.name))}
+      </span>
+      <span class="person-name">
         ${esc(u.name)}
-      </button>
-    `)
-    .join('');
+      </span>
+    </button>
+  `).join('');
   return `
     <section class="user-select">
-      <h2>Wer bist du?</h2>
-      <p class="muted">Wähle deinen Namen aus.</p>
+      <div class="section-heading">
+        <h1>Wer bist du?</h1>
+        <div class="yellow-line"></div>
+      </div>
       <input
         id="userSearch"
         class="user-search"
         type="search"
         placeholder="Name suchen …"
+        autocomplete="off"
         oninput="filterUsers(this.value)"
       >
-      <div id="userList" class="user-list">
-        ${users || '<p>Keine Benutzer gefunden.</p>'}
+      <div class="person-grid">
+        ${cards}
       </div>
-      <button class="admin-entry" onclick="openAdminLogin()">
-        ⚙️ Admin
-      </button>
     </section>
   `;
 }
 function filterUsers(value) {
   const q = value.toLowerCase().trim();
-  document.querySelectorAll('.user-card').forEach(el => {
-    el.style.display =
-      el.textContent.toLowerCase().includes(q) ? '' : 'none';
+  document.querySelectorAll('.person-card').forEach(card => {
+    const name = card.dataset.name || '';
+    card.style.display =
+      name.includes(q) ? '' : 'none';
   });
 }
 async function selectUser(id) {
-  const user = state.users.find(u => String(u.id) === String(id));
+  const user = state.users.find(
+    u => String(u.id) === String(id)
+  );
   if (!user) return;
   state.user = user;
   state.pinSet = !!user.pin_hash;
@@ -213,7 +289,6 @@ async function selectUser(id) {
 async function enterUser() {
   state.screen = 'app';
   state.tab = 'drinks';
-  state.unlocked = true;
   modal = null;
   await loadBookings();
   render();
@@ -223,17 +298,25 @@ function backToUsers() {
   state.tab = 'drinks';
   state.user = null;
   state.bookings = [];
-  state.unlocked = false;
+  state.adminUnlocked = false;
   modal = null;
   render();
 }
+/* =========================
+   NORMALE APP
+========================= */
 function accountApp() {
   const total = balance();
   const drinkCards = state.drinks
     .filter(d => d.active !== false)
     .map(d => `
-      <button class="drink" onclick="book('${d.id}')">
-        <span class="drink-icon">${esc(d.icon || '🥤')}</span>
+      <button
+        class="drink"
+        onclick="book('${d.id}')"
+      >
+        <span class="drink-icon">
+          ${esc(d.icon || '🥤')}
+        </span>
         <strong>${esc(d.name)}</strong>
         <b>${euro(d.price)}</b>
       </button>
@@ -242,83 +325,201 @@ function accountApp() {
   const bookings = state.bookings
     .filter(b => !b.cancelled_at)
     .map(b => `
-      <div class="booking-row">
+      <div class="
+        booking-row
+        ${b.settlement_id ? 'settled-booking' : ''}
+      ">
         <div>
-          <strong>${esc(b.drink_name || 'Getränk')}</strong>
-          <small>${formatDate(b.created_at)}</small>
+          <strong>
+            ${esc(b.drink_name || 'Getränk')}
+          </strong>
+          <small>
+            ${formatDate(b.created_at)}
+            ${
+              b.settlement_id
+                ? ' · bezahlt'
+                : ''
+            }
+          </small>
         </div>
         <div class="booking-price">
           ${euro(b.price)}
-          ${canUndo(b)
-            ? `<button onclick="undoBooking('${b.id}')">↶</button>`
-            : ''
+          ${
+            !b.settlement_id && canUndo(b)
+              ? `
+                <button
+                  class="undo-button"
+                  onclick="undoBooking('${b.id}')"
+                >
+                  ↶
+                </button>
+              `
+              : ''
           }
         </div>
       </div>
     `)
     .join('');
   const drinksView = `
-    <h2>Hallo ${esc(firstName(state.user?.name))} 👋</h2>
-    <div class="drink-grid">
-      ${drinkCards}
-    </div>
+    <section class="app-content">
+      <div class="app-topline">
+        <button
+          class="back-button"
+          onclick="backToUsers()"
+        >
+          ← Zurück
+        </button>
+        <div class="current-user">
+          ${esc(state.user?.name || '')}
+        </div>
+      </div>
+      <h2>
+        Hallo ${esc(firstName(state.user?.name))} 👋
+      </h2>
+      <div class="drink-grid">
+        ${drinkCards}
+      </div>
+    </section>
   `;
-  const accountView = `
-    <h2>Dein Konto</h2>
-    <div class="balance-card">
-      <small>Offener Betrag</small>
-      <strong>${euro(total)}</strong>
-    </div>
-    <div class="account-actions">
-      ${
-        state.pinSet
-          ? `
-            <button onclick="changePin()">PIN ändern</button>
-            <button onclick="removePin()">PIN entfernen</button>
-          `
-          : `
-            <button onclick="setPin()">PIN festlegen</button>
-          `
-      }
-    </div>
-    <h3>Buchungen</h3>
-    <div class="booking-list">
-      ${bookings || '<p class="muted">Noch keine Buchungen.</p>'}
-    </div>
-  `;
-  return `
-    <div class="app-head">
-      <button class="back-button" onclick="backToUsers()">
-        ← Zurück
+  const paypalButton = total > 0
+    ? `
+      <button
+        class="paypal-button"
+        onclick="openPaypal()"
+      >
+        Mit PayPal bezahlen
+        <span>${euro(total)}</span>
       </button>
-    </div>
-    ${state.tab === 'drinks' ? drinksView : accountView}
+      <p class="payment-note">
+        Nach der Zahlung wird der Betrag vom Admin
+        als bezahlt markiert.
+      </p>
+    `
+    : `
+      <div class="paid-up">
+        ✓ Aktuell ist nichts offen.
+      </div>
+    `;
+  const accountView = `
+    <section class="app-content">
+      <div class="app-topline">
+        <button
+          class="back-button"
+          onclick="backToUsers()"
+        >
+          ← Zurück
+        </button>
+        <div class="current-user">
+          ${esc(state.user?.name || '')}
+        </div>
+      </div>
+      <h2>Dein Konto</h2>
+      <div class="balance-card">
+        <small>Offener Betrag</small>
+        <strong>${euro(total)}</strong>
+      </div>
+      ${paypalButton}
+      <div class="account-actions">
+        ${
+          state.pinSet
+            ? `
+              <button onclick="changePin()">
+                PIN ändern
+              </button>
+              <button onclick="removePin()">
+                PIN entfernen
+              </button>
+            `
+            : `
+              <button onclick="setPin()">
+                PIN festlegen
+              </button>
+            `
+        }
+      </div>
+      <h3>Buchungen</h3>
+      <div class="booking-list">
+        ${
+          bookings ||
+          '<p class="muted">Noch keine Buchungen.</p>'
+        }
+      </div>
+    </section>
+  `;
+  const isJulien =
+    state.user?.name === 'Julien Ehrlich';
+  return `
+    ${
+      state.tab === 'drinks'
+        ? drinksView
+        : accountView
+    }
     <nav class="bottom-nav">
       <button
         class="${state.tab === 'drinks' ? 'active' : ''}"
         onclick="setTab('drinks')"
       >
-        🥤<span>Getränke</span>
+        <b>🥤</b>
+        <span>Getränke</span>
       </button>
       <button
         class="${state.tab === 'account' ? 'active' : ''}"
         onclick="setTab('account')"
       >
-        👤<span>Konto</span>
+        <b>👤</b>
+        <span>Konto</span>
       </button>
+      ${
+        isJulien
+          ? `
+            <button
+              onclick="openAdminLogin()"
+            >
+              <b>⚙️</b>
+              <span>Admin</span>
+            </button>
+          `
+          : ''
+      }
     </nav>
   `;
-}
-function firstName(name) {
-  return String(name || '').split(' ')[0];
 }
 function setTab(tab) {
   state.tab = tab;
   render();
 }
+/* =========================
+   PAYPAL
+========================= */
+function openPaypal() {
+  const total = balance();
+  if (total <= 0) {
+    showToast('Kein offener Betrag');
+    return;
+  }
+  const base = String(cfg.PAYPAL_URL || '').trim();
+  if (!base) {
+    showToast('PayPal-Link ist noch nicht hinterlegt');
+    return;
+  }
+  let url = base;
+  if (/paypal\.me/i.test(base)) {
+    url =
+      base.replace(/\/+$/, '') +
+      '/' +
+      total.toFixed(2) +
+      'EUR';
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+/* =========================
+   BUCHEN
+========================= */
 async function book(id) {
   if (!state.user) return;
-  const drink = state.drinks.find(d => String(d.id) === String(id));
+  const drink = state.drinks.find(
+    d => String(d.id) === String(id)
+  );
   if (!drink) return;
   if (!online) {
     state.bookings.unshift({
@@ -328,20 +529,20 @@ async function book(id) {
       drink_name: drink.name,
       price: drink.price,
       created_at: new Date().toISOString(),
-      cancelled_at: null
+      cancelled_at: null,
+      settlement_id: null
     });
     showToast(`${drink.name} gebucht`);
     return;
   }
-  const payload = {
-    user_id: state.user.id,
-    drink_id: drink.id,
-    drink_name: drink.name,
-    price: drink.price
-  };
   const { error } = await db
     .from('bookings')
-    .insert(payload);
+    .insert({
+      user_id: state.user.id,
+      drink_id: drink.id,
+      drink_name: drink.name,
+      price: drink.price
+    });
   if (error) {
     console.error(error);
     showToast('Buchung fehlgeschlagen');
@@ -351,19 +552,24 @@ async function book(id) {
   showToast(`${drink.name} gebucht`);
 }
 function canUndo(b) {
-  if (!b.created_at || b.cancelled_at) return false;
-  return Date.now() - new Date(b.created_at).getTime() <= 5 * 60 * 1000;
+  if (
+    !b.created_at ||
+    b.cancelled_at ||
+    b.settlement_id
+  ) {
+    return false;
+  }
+  return (
+    Date.now() -
+    new Date(b.created_at).getTime()
+  ) <= 5 * 60 * 1000;
 }
 async function undoBooking(id) {
-  if (!online) {
-    const b = state.bookings.find(x => String(x.id) === String(id));
-    if (b) b.cancelled_at = new Date().toISOString();
-    showToast('Buchung storniert');
-    return;
-  }
   const { error } = await db
     .from('bookings')
-    .update({ cancelled_at: new Date().toISOString() })
+    .update({
+      cancelled_at: new Date().toISOString()
+    })
     .eq('id', id);
   if (error) {
     console.error(error);
@@ -373,14 +579,9 @@ async function undoBooking(id) {
   await loadBookings();
   showToast('Buchung storniert');
 }
-function formatDate(value) {
-  if (!value) return '';
-  return new Date(value).toLocaleString('de-DE', {
-    dateStyle: 'short',
-    timeStyle: 'short'
-  });
-}
-/* ---------------- PIN ---------------- */
+/* =========================
+   BENUTZER-PIN
+========================= */
 function validPin(pin) {
   return /^\d{4}$/.test(pin);
 }
@@ -401,8 +602,15 @@ function pinDialog(title, label, callback) {
           placeholder="••••"
         >
         <div class="modal-actions">
-          <button class="secondary" onclick="closeModal()">Abbrechen</button>
-          <button onclick="submitPin()">OK</button>
+          <button
+            class="secondary"
+            onclick="closeModal()"
+          >
+            Abbrechen
+          </button>
+          <button onclick="submitPin()">
+            OK
+          </button>
         </div>
       </div>
     </div>
@@ -413,13 +621,15 @@ function pinDialog(title, label, callback) {
   }, 50);
 }
 async function submitPin() {
-  const pin = document.querySelector('#pinInput')?.value || '';
+  const pin =
+    document.querySelector('#pinInput')?.value || '';
   if (!validPin(pin)) {
     showToast('Bitte vier Ziffern eingeben');
     return;
   }
   if (window.__pinCallback) {
-    const close = await window.__pinCallback(pin);
+    const close =
+      await window.__pinCallback(pin);
     if (close !== false) {
       modal = null;
       render();
@@ -461,10 +671,19 @@ function removePin() {
     <div class="modal-wrap">
       <div class="modal">
         <h3>PIN entfernen?</h3>
-        <p>Das Konto ist danach wieder ohne PIN zugänglich.</p>
+        <p>
+          Das Konto ist danach wieder ohne PIN zugänglich.
+        </p>
         <div class="modal-actions">
-          <button class="secondary" onclick="closeModal()">Abbrechen</button>
-          <button onclick="confirmRemovePin()">PIN entfernen</button>
+          <button
+            class="secondary"
+            onclick="closeModal()"
+          >
+            Abbrechen
+          </button>
+          <button onclick="confirmRemovePin()">
+            PIN entfernen
+          </button>
         </div>
       </div>
     </div>
@@ -486,7 +705,9 @@ async function confirmRemovePin() {
   modal = null;
   showToast('PIN entfernt');
 }
-/* ---------------- ADMIN ---------------- */
+/* =========================
+   ADMIN LOGIN
+========================= */
 function openAdminLogin() {
   state.screen = 'admin-login';
   render();
@@ -494,11 +715,19 @@ function openAdminLogin() {
 function adminLoginScreen() {
   return `
     <section class="admin-login">
-      <button class="back-button" onclick="backToUsers()">
+      <button
+        class="back-button"
+        onclick="returnFromAdminLogin()"
+      >
         ← Zurück
       </button>
-      <h2>Admin-Bereich</h2>
-      <p class="muted">Admin-PIN eingeben</p>
+      <div class="section-heading">
+        <h1>Admin</h1>
+        <div class="yellow-line"></div>
+      </div>
+      <p class="muted">
+        Admin-PIN eingeben
+      </p>
       <input
         id="adminPin"
         class="pin-input"
@@ -507,21 +736,30 @@ function adminLoginScreen() {
         maxlength="12"
         placeholder="PIN"
       >
-      <button class="admin-login-button" onclick="checkAdminPin()">
+      <button
+        class="primary-button"
+        onclick="checkAdminPin()"
+      >
         Anmelden
       </button>
     </section>
   `;
 }
+function returnFromAdminLogin() {
+  state.screen = state.user ? 'app' : 'users';
+  render();
+}
 async function checkAdminPin() {
-  const pin = document.querySelector('#adminPin')?.value || '';
+  const pin =
+    document.querySelector('#adminPin')?.value || '';
   if (!pin) {
     showToast('PIN eingeben');
     return;
   }
-  const { data, error } = await db.rpc('check_admin_pin', {
-    p_pin: pin
-  });
+  const { data, error } =
+    await db.rpc('check_admin_pin', {
+      p_pin: pin
+    });
   if (error) {
     console.error(error);
     showToast('Admin-Anmeldung fehlgeschlagen');
@@ -531,197 +769,262 @@ async function checkAdminPin() {
     showToast('Admin-PIN ist falsch');
     return;
   }
-  state.admin = true;
+  state.adminUnlocked = true;
   state.screen = 'admin';
-  await loadUsers();
-  await loadDrinks();
+  state.adminTab = 'accounts';
+  await Promise.all([
+    loadUsers(),
+    loadDrinks(),
+    loadAdminData()
+  ]);
   render();
 }
 function leaveAdmin() {
-  state.admin = false;
-  state.screen = 'users';
+  state.adminUnlocked = false;
+  state.screen = state.user ? 'app' : 'users';
   render();
 }
+/* =========================
+   ADMIN
+========================= */
 function adminScreen() {
-  const users = state.users.map(u => `
-    <div class="admin-row">
-      <span>${esc(u.name)}</span>
-      <div>
-        <button onclick="renameUser('${u.id}')">✏️</button>
-        <button onclick="resetUserPin('${u.id}')">🔑</button>
-      </div>
-    </div>
-  `).join('');
-  const drinks = state.drinks.map(d => `
-    <div class="admin-row">
-      <div>
-        <strong>${esc(d.name)}</strong>
-        <small>${euro(d.price)}</small>
-      </div>
-      <button onclick="editDrink('${d.id}')">✏️</button>
-    </div>
-  `).join('');
   return `
-    <div class="app-head">
-      <button class="back-button" onclick="leaveAdmin()">
-        ← Admin verlassen
-      </button>
-    </div>
-    <h2>⚙️ Admin</h2>
-    <section class="admin-section">
-      <div class="admin-section-head">
-        <h3>Benutzer</h3>
-        <button onclick="addUser()">+ Benutzer</button>
+    <section class="admin-page">
+      <div class="app-topline">
+        <button
+          class="back-button"
+          onclick="leaveAdmin()"
+        >
+          ← Zurück
+        </button>
+        <strong>Admin</strong>
       </div>
-      <div class="admin-list">
-        ${users}
+      <div class="admin-tabs">
+        <button
+          class="${state.adminTab === 'accounts' ? 'active' : ''}"
+          onclick="setAdminTab('accounts')"
+        >
+          Konten
+        </button>
+        <button
+          class="${state.adminTab === 'settlements' ? 'active' : ''}"
+          onclick="setAdminTab('settlements')"
+        >
+          Abrechnungen
+        </button>
+        <button
+          class="${state.adminTab === 'drinks' ? 'active' : ''}"
+          onclick="setAdminTab('drinks')"
+        >
+          Getränke
+        </button>
+        <button
+          class="${state.adminTab === 'users' ? 'active' : ''}"
+          onclick="setAdminTab('users')"
+        >
+          Benutzer
+        </button>
       </div>
-    </section>
-    <section class="admin-section">
-      <div class="admin-section-head">
-        <h3>Getränke</h3>
-        <button onclick="addDrink()">+ Getränk</button>
-      </div>
-      <div class="admin-list">
-        ${drinks}
-      </div>
-    </section>
-    <section class="admin-section">
-      <div class="admin-section-head">
-        <h3>Konten</h3>
-      </div>
-      <button onclick="showAccounts()">
-        Kontostände anzeigen
-      </button>
-      <div id="adminAccounts"></div>
+      ${adminTabContent()}
     </section>
   `;
 }
-async function addUser() {
-  const name = prompt('Name des neuen Benutzers:');
-  if (!name?.trim()) return;
-  const { error } = await db
-    .from('users')
-    .insert({ name: name.trim() });
-  if (error) {
-    console.error(error);
-    showToast('Benutzer konnte nicht angelegt werden');
-    return;
-  }
-  await loadUsers();
-  showToast('Benutzer angelegt');
+function setAdminTab(tab) {
+  state.adminTab = tab;
+  render();
 }
-async function renameUser(id) {
-  const user = state.users.find(u => String(u.id) === String(id));
-  if (!user) return;
-  const name = prompt('Name ändern:', user.name);
-  if (!name?.trim()) return;
-  const { error } = await db
-    .from('users')
-    .update({ name: name.trim() })
-    .eq('id', id);
-  if (error) {
-    console.error(error);
-    showToast('Name konnte nicht geändert werden');
-    return;
+function adminTabContent() {
+  if (state.adminTab === 'accounts') {
+    return adminAccounts();
   }
-  await loadUsers();
-  showToast('Name geändert');
+  if (state.adminTab === 'settlements') {
+    return adminSettlements();
+  }
+  if (state.adminTab === 'drinks') {
+    return adminDrinks();
+  }
+  return adminUsers();
 }
-async function resetUserPin(id) {
-  if (!confirm('PIN dieses Benutzers wirklich entfernen?')) return;
-  const { error } = await db
-    .from('users')
-    .update({ pin_hash: null })
-    .eq('id', id);
-  if (error) {
-    console.error(error);
-    showToast('PIN konnte nicht entfernt werden');
-    return;
-  }
-  await loadUsers();
-  showToast('PIN entfernt');
-}
-async function addDrink() {
-  const name = prompt('Name des Getränks:');
-  if (!name?.trim()) return;
-  const priceText = prompt('Preis, z. B. 1,00:');
-  if (!priceText) return;
-  const price = Number(priceText.replace(',', '.'));
-  if (!Number.isFinite(price)) {
-    showToast('Ungültiger Preis');
-    return;
-  }
-  const icon = prompt('Emoji:', '🥤') || '🥤';
-  const { error } = await db
-    .from('drinks')
-    .insert({
-      name: name.trim(),
-      price,
-      icon,
-      active: true
-    });
-  if (error) {
-    console.error(error);
-    showToast('Getränk konnte nicht angelegt werden');
-    return;
-  }
-  await loadDrinks();
-  showToast('Getränk angelegt');
-}
-async function editDrink(id) {
-  const drink = state.drinks.find(d => String(d.id) === String(id));
-  if (!drink) return;
-  const name = prompt('Getränkename:', drink.name);
-  if (!name?.trim()) return;
-  const priceText = prompt(
-    'Preis:',
-    String(drink.price).replace('.', ',')
-  );
-  if (!priceText) return;
-  const price = Number(priceText.replace(',', '.'));
-  if (!Number.isFinite(price)) {
-    showToast('Ungültiger Preis');
-    return;
-  }
-  const { error } = await db
-    .from('drinks')
-    .update({
-      name: name.trim(),
-      price
-    })
-    .eq('id', id);
-  if (error) {
-    console.error(error);
-    showToast('Getränk konnte nicht geändert werden');
-    return;
-  }
-  await loadDrinks();
-  showToast('Getränk geändert');
-}
-async function showAccounts() {
-  const { data, error } = await db
-    .from('bookings')
-    .select('*');
-  if (error) {
-    console.error(error);
-    showToast('Konten konnten nicht geladen werden');
-    return;
-  }
-  const totals = {};
-  (data || [])
-    .filter(b => !b.cancelled_at)
-    .forEach(b => {
-      totals[b.user_id] =
-        (totals[b.user_id] || 0) + Number(b.price || 0);
-    });
-  const html = state.users.map(u => `
-    <div class="admin-row">
-      <span>${esc(u.name)}</span>
-      <strong>${euro(totals[u.id] || 0)}</strong>
+function adminAccounts() {
+  const rows = state.users.map(user => {
+    const bookings = state.adminBookings.filter(
+      b =>
+        String(b.user_id) === String(user.id) &&
+        !b.cancelled_at &&
+        !b.settlement_id
+    );
+    const total = bookings.reduce(
+      (sum, b) => sum + Number(b.price || 0),
+      0
+    );
+    if (total <= 0) return '';
+    return `
+      <div class="admin-account-card">
+        <div>
+          <strong>${esc(user.name)}</strong>
+          <small>
+            ${bookings.length}
+            ${
+              bookings.length === 1
+                ? 'Buchung'
+                : 'Buchungen'
+            }
+          </small>
+        </div>
+        <div class="admin-account-right">
+          <strong>${euro(total)}</strong>
+          <button
+            onclick="confirmSettlement('${user.id}')"
+          >
+            Bezahlt
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  const grandTotal =
+    state.adminBookings
+      .filter(
+        b =>
+          !b.cancelled_at &&
+          !b.settlement_id
+      )
+      .reduce(
+        (sum, b) =>
+          sum + Number(b.price || 0),
+        0
+      );
+  return `
+    <div class="admin-summary">
+      <small>Gesamt offen</small>
+      <strong>${euro(grandTotal)}</strong>
     </div>
-  `).join('');
-  const el = document.querySelector('#adminAccounts');
-  if (el) el.innerHTML = html;
+    <div class="admin-list">
+      ${
+        rows ||
+        '<p class="muted">Keine offenen Konten.</p>'
+      }
+    </div>
+  `;
 }
-init();
+function confirmSettlement(userId) {
+  const user = state.users.find(
+    u => String(u.id) === String(userId)
+  );
+  if (!user) return;
+  const bookings =
+    state.adminBookings.filter(
+      b =>
+        String(b.user_id) === String(userId) &&
+        !b.cancelled_at &&
+        !b.settlement_id
+    );
+  const total = bookings.reduce(
+    (sum, b) => sum + Number(b.price || 0),
+    0
+  );
+  if (total <= 0) return;
+  modal = `
+    <div class="modal-wrap">
+      <div class="modal">
+        <h3>Als bezahlt markieren?</h3>
+        <p>
+          ${esc(user.name)}<br>
+          <strong>${euro(total)}</strong>
+        </p>
+        <p class="muted">
+          ${bookings.length} Buchungen werden
+          dieser Abrechnung dauerhaft zugeordnet.
+          Die Buchungen werden nicht gelöscht.
+        </p>
+        <div class="modal-actions">
+          <button
+            class="secondary"
+            onclick="closeModal()"
+          >
+            Abbrechen
+          </button>
+          <button
+            onclick="settleUser('${userId}')"
+          >
+            Bezahlt
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  render();
+}
+async function settleUser(userId) {
+  const { error } = await db.rpc(
+    'settle_user',
+    { p_user_id: userId }
+  );
+  if (error) {
+    console.error(error);
+    showToast('Abrechnung konnte nicht gespeichert werden');
+    return;
+  }
+  modal = null;
+  await loadAdminData();
+  if (
+    state.user &&
+    String(state.user.id) === String(userId)
+  ) {
+    await loadBookings();
+  }
+  showToast('Als bezahlt verbucht');
+}
+function adminSettlements() {
+  if (!state.settlements.length) {
+    return `
+      <p class="muted">
+        Noch keine Abrechnungen vorhanden.
+      </p>
+    `;
+  }
+  return `
+    <div class="settlement-list">
+      ${state.settlements.map(s => {
+        const user = state.users.find(
+          u => String(u.id) === String(s.user_id)
+        );
+        const items =
+          state.adminBookings.filter(
+            b =>
+              String(b.settlement_id) ===
+              String(s.id)
+          );
+        const summary = {};
+        items.forEach(b => {
+          const key =
+            b.drink_name || 'Getränk';
+          if (!summary[key]) {
+            summary[key] = {
+              count: 0,
+              total: 0
+            };
+          }
+          summary[key].count += 1;
+          summary[key].total +=
+            Number(b.price || 0);
+        });
+        const details =
+          Object.entries(summary)
+            .map(([name, info]) => `
+              <div class="settlement-item">
+                <span>
+                  ${info.count} × ${esc(name)}
+                </span>
+                <strong>
+                  ${euro(info.total)}
+                </strong>
+              </div>
+            `)
+            .join('');
+        return `
+          <details class="settlement-card">
+            <summary>
+              <div>
+                <strong>
+                  ${esc(user?.name || 'Benutzer
