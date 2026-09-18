@@ -1244,7 +1244,7 @@ function adminAccounts() {
     .map(user => {
       const open = adminBalance(user.id);
 
-      if Math.abs(open) < 0.001) {
+      if (Math.abs(open) < 0.001) {
         return '';
       }
 
