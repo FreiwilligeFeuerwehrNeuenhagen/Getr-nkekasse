@@ -9,236 +9,396 @@ const FALLBACK_DRINKS = [
   ['Radler', 1, '🍺'],
   ['Wasser', .5, '💧']
 ];
+
 const cfg = window.APP_CONFIG || {};
+
 const online = !!(
   cfg.SUPABASE_URL &&
   cfg.SUPABASE_ANON_KEY &&
   window.supabase
 );
+
 const db = online
   ? window.supabase.createClient(
       cfg.SUPABASE_URL,
       cfg.SUPABASE_ANON_KEY
     )
   : null;
+
 let state = {
   screen: 'users',
   tab: 'drinks',
   adminTab: 'accounts',
+
+  users: [],
   drinks: [],
   bookings: [],
-  users: [],
+  settlements: [],
+
+  adminBookings: [],
+  adminSettlements: [],
+
   user: null,
   pinSet: false,
-  adminUnlocked: false,
-  adminBookings: [],
-  settlements: []
+  admin: false,
+
+  paypalUrl: ''
 };
+
 let modal = null;
 let toast = '';
-const euro = n =>
-  Number(n || 0).toLocaleString('de-DE', {
+
+/* =========================
+   HILFSFUNKTIONEN
+========================= */
+
+const euro = value =>
+  Number(value || 0).toLocaleString('de-DE', {
     style: 'currency',
     currency: 'EUR'
   });
-const esc = s =>
-  String(s ?? '').replace(/[&<>"']/g, m => ({
+
+const esc = value =>
+  String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;',
     '<': '&lt;',
     '>': '&gt;',
     '"': '&quot;',
     "'": '&#39;'
-  })[m]);
-async function hashPin(pin) {
-  const data = new TextEncoder().encode(pin);
-  const buf = await crypto.subtle.digest('SHA-256', data);
-  return [...new Uint8Array(buf)]
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+  })[char]);
+
+function firstName(name) {
+  return String(name || '')
+    .trim()
+    .split(/\s+/)[0] || '';
 }
-function showToast(text) {
-  toast = text;
-  render();
-  setTimeout(() => {
-    toast = '';
-    render();
-  }, 1800);
-}
+
 function initials(name) {
   const parts = String(name || '')
     .trim()
     .split(/\s+/)
     .filter(Boolean);
+
   if (!parts.length) return '?';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+
   return (
     parts[0].charAt(0) +
     parts[parts.length - 1].charAt(0)
   ).toUpperCase();
 }
-function firstName(name) {
-  return String(name || '').trim().split(/\s+/)[0] || '';
-}
+
 function formatDate(value) {
   if (!value) return '';
+
   return new Date(value).toLocaleString('de-DE', {
     dateStyle: 'short',
     timeStyle: 'short'
   });
 }
+
+async function hashPin(pin) {
+  const data = new TextEncoder().encode(pin);
+  const buffer = await crypto.subtle.digest(
+    'SHA-256',
+    data
+  );
+
+  return [...new Uint8Array(buffer)]
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function showToast(text) {
+  toast = text;
+  render();
+
+  setTimeout(() => {
+    toast = '';
+    render();
+  }, 1800);
+}
+
+/* =========================
+   DATEN LADEN
+========================= */
+
 async function init() {
   if (!online) {
-    state.drinks = FALLBACK_DRINKS.map((d, i) => ({
-      id: String(i),
-      name: d[0],
-      price: d[1],
-      icon: d[2],
-      active: true
-    }));
+    state.drinks = FALLBACK_DRINKS.map(
+      (drink, index) => ({
+        id: String(index),
+        name: drink[0],
+        price: drink[1],
+        icon: drink[2],
+        active: true
+      })
+    );
+
     render();
     return;
   }
+
   await Promise.all([
     loadUsers(),
-    loadDrinks()
+    loadDrinks(),
+    loadSettings()
   ]);
+
   render();
 }
+
 async function loadUsers() {
   const { data, error } = await db
     .from('users')
     .select('*')
     .order('name');
+
   if (error) {
     console.error(error);
     return;
   }
+
   state.users = data || [];
 }
+
 async function loadDrinks() {
   const { data, error } = await db
     .from('drinks')
     .select('*')
     .order('name');
+
   if (error) {
     console.error(error);
     return;
   }
+
   state.drinks = data || [];
 }
-async function loadBookings() {
-  if (!state.user) return;
+
+async function loadSettings() {
   const { data, error } = await db
-    .from('bookings')
-    .select('*')
-    .eq('user_id', state.user.id)
-    .order('created_at', { ascending: false });
+    .from('admin_settings')
+    .select('paypal_url')
+    .eq('id', 1)
+    .maybeSingle();
+
   if (error) {
     console.error(error);
     return;
   }
-  state.bookings = data || [];
+
+  state.paypalUrl = data?.paypal_url || '';
 }
-async function loadAdminData() {
-  const [
-    bookingsResult,
-    settlementsResult
-  ] = await Promise.all([
-    db.from('bookings')
-      .select('*')
-      .order('created_at', { ascending: false }),
-    db.from('settlements')
-      .select('*')
-      .order('settled_at', { ascending: false })
-  ]);
+
+async function loadUserAccount() {
+  if (!state.user) return;
+
+  const [bookingsResult, settlementsResult] =
+    await Promise.all([
+      db
+        .from('bookings')
+        .select('*')
+        .eq('user_id', state.user.id)
+        .order('created_at', { ascending: false }),
+
+      db
+        .from('settlements')
+        .select('*')
+        .eq('user_id', state.user.id)
+        .order('settled_at', { ascending: false })
+    ]);
+
   if (bookingsResult.error) {
     console.error(bookingsResult.error);
   } else {
-    state.adminBookings = bookingsResult.data || [];
+    state.bookings = bookingsResult.data || [];
   }
+
   if (settlementsResult.error) {
     console.error(settlementsResult.error);
   } else {
     state.settlements = settlementsResult.data || [];
   }
 }
-function openBookings(bookings = state.bookings) {
-  return bookings.filter(
-    b => !b.cancelled_at && !b.settlement_id
-  );
+
+async function loadAdminData() {
+  const [bookingsResult, settlementsResult] =
+    await Promise.all([
+      db
+        .from('bookings')
+        .select('*')
+        .order('created_at', { ascending: false }),
+
+      db
+        .from('settlements')
+        .select('*')
+        .order('settled_at', { ascending: false })
+    ]);
+
+  if (bookingsResult.error) {
+    console.error(bookingsResult.error);
+  } else {
+    state.adminBookings = bookingsResult.data || [];
+  }
+
+  if (settlementsResult.error) {
+    console.error(settlementsResult.error);
+  } else {
+    state.adminSettlements = settlementsResult.data || [];
+  }
 }
-function balance() {
-  return openBookings().reduce(
-    (sum, b) => sum + Number(b.price || 0),
+
+/* =========================
+   BERECHNUNGEN
+========================= */
+
+function bookingTotal(bookings) {
+  return (bookings || [])
+    .filter(booking => !booking.cancelled_at)
+    .reduce(
+      (sum, booking) =>
+        sum + Number(booking.price || 0),
+      0
+    );
+}
+
+function paymentTotal(payments) {
+  return (payments || []).reduce(
+    (sum, payment) =>
+      sum + Number(payment.total || 0),
     0
   );
 }
+
+function userBalance() {
+  return Math.max(
+    0,
+    bookingTotal(state.bookings) -
+      paymentTotal(state.settlements)
+  );
+}
+
+function adminBalance(userId) {
+  const bookings = state.adminBookings.filter(
+    booking =>
+      String(booking.user_id) === String(userId)
+  );
+
+  const payments = state.adminSettlements.filter(
+    payment =>
+      String(payment.user_id) === String(userId)
+  );
+
+  return Math.max(
+    0,
+    bookingTotal(bookings) -
+      paymentTotal(payments)
+  );
+}
+
+/* =========================
+   GRUNDLAYOUT
+========================= */
+
 function appShell(content) {
   return `
     <main class="shell">
+
       <header class="main-header">
         <div class="main-title">
           GETRÄNKE<span>LISTE</span>
         </div>
+
         <div class="main-subtitle">
           Freiwillige Feuerwehr Neuenhagen
           ${
             online
-              ? '<span class="online-dot">● synchronisiert</span>'
+              ? '<span class="online">● synchronisiert</span>'
               : ''
           }
         </div>
       </header>
+
       ${content}
-      ${toast
-        ? `<div class="toast">${esc(toast)}</div>`
-        : ''
+
+      ${
+        toast
+          ? `<div class="toast">${esc(toast)}</div>`
+          : ''
       }
+
       ${modal || ''}
+
     </main>
   `;
 }
+
 function render() {
   const root = document.querySelector('#app');
+
   if (!root) return;
+
   if (state.screen === 'users') {
     root.innerHTML = appShell(userScreen());
     return;
   }
+
   if (state.screen === 'admin-login') {
     root.innerHTML = appShell(adminLoginScreen());
     return;
   }
+
   if (state.screen === 'admin') {
     root.innerHTML = appShell(adminScreen());
     return;
   }
+
   root.innerHTML = appShell(accountApp());
 }
+
 /* =========================
-   BENUTZERAUSWAHL
+   NAMENSAUSWAHL
 ========================= */
+
 function userScreen() {
-  const cards = state.users.map(u => `
-    <button
-      class="person-card"
-      onclick="selectUser('${u.id}')"
-      data-name="${esc(u.name.toLowerCase())}"
-    >
-      <span class="person-initials">
-        ${esc(initials(u.name))}
-      </span>
-      <span class="person-name">
-        ${esc(u.name)}
-      </span>
-    </button>
-  `).join('');
+  const users = [...state.users]
+    .sort((a, b) =>
+      String(a.name).localeCompare(
+        String(b.name),
+        'de'
+      )
+    )
+    .map(user => `
+      <button
+        class="person-card"
+        data-name="${esc(
+          String(user.name).toLowerCase()
+        )}"
+        onclick="selectUser('${user.id}')"
+      >
+        <span class="person-initials">
+          ${esc(initials(user.name))}
+        </span>
+
+        <span class="person-name">
+          ${esc(user.name)}
+        </span>
+      </button>
+    `)
+    .join('');
+
   return `
     <section class="user-select">
+
       <div class="section-heading">
         <h1>Wer bist du?</h1>
         <div class="yellow-line"></div>
       </div>
+
       <input
         id="userSearch"
         class="user-search"
@@ -247,109 +407,144 @@ function userScreen() {
         autocomplete="off"
         oninput="filterUsers(this.value)"
       >
+
       <div class="person-grid">
-        ${cards}
+        ${
+          users ||
+          '<p class="muted">Keine Benutzer gefunden.</p>'
+        }
       </div>
+
+      <button
+        class="admin-entry"
+        onclick="openAdminLogin()"
+      >
+        ⚙️ Admin
+      </button>
+
     </section>
   `;
 }
+
 function filterUsers(value) {
-  const q = value.toLowerCase().trim();
-  document.querySelectorAll('.person-card').forEach(card => {
-    const name = card.dataset.name || '';
-    card.style.display =
-      name.includes(q) ? '' : 'none';
-  });
+  const query = String(value || '')
+    .toLowerCase()
+    .trim();
+
+  document
+    .querySelectorAll('.person-card')
+    .forEach(card => {
+      const name = card.dataset.name || '';
+
+      card.style.display =
+        name.includes(query) ? '' : 'none';
+    });
 }
+
+/* =========================
+   BENUTZER ÖFFNEN
+========================= */
+
 async function selectUser(id) {
   const user = state.users.find(
-    u => String(u.id) === String(id)
+    item => String(item.id) === String(id)
   );
+
   if (!user) return;
+
   state.user = user;
   state.pinSet = !!user.pin_hash;
+
   if (state.pinSet) {
     pinDialog(
       'PIN eingeben',
       'Deine vierstellige PIN',
       async pin => {
         const hash = await hashPin(pin);
+
         if (hash !== user.pin_hash) {
           showToast('PIN ist falsch');
           return false;
         }
+
         await enterUser();
         return true;
       }
     );
+
     return;
   }
+
   await enterUser();
 }
+
 async function enterUser() {
   state.screen = 'app';
   state.tab = 'drinks';
   modal = null;
-  await loadBookings();
+
+  await loadUserAccount();
   render();
 }
+
 function backToUsers() {
   state.screen = 'users';
   state.tab = 'drinks';
   state.user = null;
   state.bookings = [];
-  state.adminUnlocked = false;
+  state.settlements = [];
   modal = null;
+
   render();
 }
 /* =========================
-   NORMALE APP
+   GETRÄNKE + KONTO
 ========================= */
+
 function accountApp() {
-  const total = balance();
-  const drinkCards = state.drinks
-    .filter(d => d.active !== false)
-    .map(d => `
+  const total = userBalance();
+
+  const drinks = state.drinks
+    .filter(drink => drink.active !== false)
+    .map(drink => `
       <button
         class="drink"
-        onclick="book('${d.id}')"
+        onclick="book('${drink.id}')"
       >
         <span class="drink-icon">
-          ${esc(d.icon || '🥤')}
+          ${esc(drink.icon || '🥤')}
         </span>
-        <strong>${esc(d.name)}</strong>
-        <b>${euro(d.price)}</b>
+
+        <strong>${esc(drink.name)}</strong>
+        <b>${euro(drink.price)}</b>
       </button>
     `)
     .join('');
-  const bookings = state.bookings
-    .filter(b => !b.cancelled_at)
-    .map(b => `
-      <div class="
-        booking-row
-        ${b.settlement_id ? 'settled-booking' : ''}
-      ">
+
+  const bookingRows = state.bookings
+    .filter(booking => !booking.cancelled_at)
+    .map(booking => `
+      <div class="booking-row">
         <div>
           <strong>
-            ${esc(b.drink_name || 'Getränk')}
+            ${esc(booking.drink_name || 'Getränk')}
           </strong>
+
           <small>
-            ${formatDate(b.created_at)}
-            ${
-              b.settlement_id
-                ? ' · bezahlt'
-                : ''
-            }
+            ${formatDate(booking.created_at)}
           </small>
         </div>
+
         <div class="booking-price">
-          ${euro(b.price)}
+          ${euro(booking.price)}
+
           ${
-            !b.settlement_id && canUndo(b)
+            canUndo(booking)
               ? `
                 <button
                   class="undo-button"
-                  onclick="undoBooking('${b.id}')"
+                  onclick="undoBooking('${booking.id}')"
+                  title="Stornieren"
                 >
                   ↶
                 </button>
@@ -360,8 +555,33 @@ function accountApp() {
       </div>
     `)
     .join('');
+
+  const paymentRows = state.settlements
+    .map(payment => `
+      <div class="payment-row">
+        <div>
+          <strong>Zahlung</strong>
+
+          <small>
+            ${formatDate(payment.settled_at)}
+            ${
+              payment.payment_method
+                ? ` · ${esc(payment.payment_method)}`
+                : ''
+            }
+          </small>
+        </div>
+
+        <strong>
+          − ${euro(payment.total)}
+        </strong>
+      </div>
+    `)
+    .join('');
+
   const drinksView = `
     <section class="app-content">
+
       <div class="app-topline">
         <button
           class="back-button"
@@ -369,39 +589,30 @@ function accountApp() {
         >
           ← Zurück
         </button>
-        <div class="current-user">
-          ${esc(state.user?.name || '')}
-        </div>
+
+        <span class="current-user">
+          ${esc(state.user?.name)}
+        </span>
       </div>
+
       <h2>
         Hallo ${esc(firstName(state.user?.name))} 👋
       </h2>
+
+      <p class="muted">
+        Was möchtest du buchen?
+      </p>
+
       <div class="drink-grid">
-        ${drinkCards}
+        ${drinks}
       </div>
+
     </section>
   `;
-  const paypalButton = total > 0
-    ? `
-      <button
-        class="paypal-button"
-        onclick="openPaypal()"
-      >
-        Mit PayPal bezahlen
-        <span>${euro(total)}</span>
-      </button>
-      <p class="payment-note">
-        Nach der Zahlung wird der Betrag vom Admin
-        als bezahlt markiert.
-      </p>
-    `
-    : `
-      <div class="paid-up">
-        ✓ Aktuell ist nichts offen.
-      </div>
-    `;
+
   const accountView = `
     <section class="app-content">
+
       <div class="app-topline">
         <button
           class="back-button"
@@ -409,16 +620,42 @@ function accountApp() {
         >
           ← Zurück
         </button>
-        <div class="current-user">
-          ${esc(state.user?.name || '')}
-        </div>
+
+        <span class="current-user">
+          ${esc(state.user?.name)}
+        </span>
       </div>
+
       <h2>Dein Konto</h2>
+
       <div class="balance-card">
         <small>Offener Betrag</small>
         <strong>${euro(total)}</strong>
       </div>
-      ${paypalButton}
+
+      ${
+        total > 0
+          ? `
+            <button
+              class="paypal-button"
+              onclick="openPaypal()"
+            >
+              <span>Mit PayPal bezahlen</span>
+              <strong>${euro(total)}</strong>
+            </button>
+
+            <p class="payment-note">
+              Auch Teilzahlungen sind möglich.
+              Der Admin verbucht die Zahlung anschließend.
+            </p>
+          `
+          : `
+            <div class="paid-up">
+              ✓ Aktuell ist nichts offen.
+            </div>
+          `
+      }
+
       <div class="account-actions">
         ${
           state.pinSet
@@ -426,6 +663,7 @@ function accountApp() {
               <button onclick="changePin()">
                 PIN ändern
               </button>
+
               <button onclick="removePin()">
                 PIN entfernen
               </button>
@@ -437,24 +675,39 @@ function accountApp() {
             `
         }
       </div>
+
       <h3>Buchungen</h3>
+
       <div class="booking-list">
         ${
-          bookings ||
+          bookingRows ||
           '<p class="muted">Noch keine Buchungen.</p>'
         }
       </div>
+
+      ${
+        paymentRows
+          ? `
+            <h3>Zahlungen</h3>
+            <div class="payment-list">
+              ${paymentRows}
+            </div>
+          `
+          : ''
+      }
+
     </section>
   `;
-  const isJulien =
-    state.user?.name === 'Julien Ehrlich';
+
   return `
     ${
       state.tab === 'drinks'
         ? drinksView
         : accountView
     }
+
     <nav class="bottom-nav">
+
       <button
         class="${state.tab === 'drinks' ? 'active' : ''}"
         onclick="setTab('drinks')"
@@ -462,6 +715,7 @@ function accountApp() {
         <b>🥤</b>
         <span>Getränke</span>
       </button>
+
       <button
         class="${state.tab === 'account' ? 'active' : ''}"
         onclick="setTab('account')"
@@ -469,58 +723,48 @@ function accountApp() {
         <b>👤</b>
         <span>Konto</span>
       </button>
-      ${
-        isJulien
-          ? `
-            <button
-              onclick="openAdminLogin()"
-            >
-              <b>⚙️</b>
-              <span>Admin</span>
-            </button>
-          `
-          : ''
-      }
+
     </nav>
   `;
 }
+
 function setTab(tab) {
   state.tab = tab;
   render();
 }
+
 /* =========================
    PAYPAL
 ========================= */
+
 function openPaypal() {
-  const total = balance();
-  if (total <= 0) {
-    showToast('Kein offener Betrag');
+  const url = String(state.paypalUrl || '').trim();
+
+  if (!url) {
+    showToast('PayPal-Link ist noch nicht eingerichtet');
     return;
   }
-  const base = String(cfg.PAYPAL_URL || '').trim();
-  if (!base) {
-    showToast('PayPal-Link ist noch nicht hinterlegt');
-    return;
-  }
-  let url = base;
-  if (/paypal\.me/i.test(base)) {
-    url =
-      base.replace(/\/+$/, '') +
-      '/' +
-      total.toFixed(2) +
-      'EUR';
-  }
-  window.open(url, '_blank', 'noopener,noreferrer');
+
+  window.open(
+    url,
+    '_blank',
+    'noopener,noreferrer'
+  );
 }
+
 /* =========================
-   BUCHEN
+   GETRÄNK BUCHEN
 ========================= */
+
 async function book(id) {
   if (!state.user) return;
+
   const drink = state.drinks.find(
-    d => String(d.id) === String(id)
+    item => String(item.id) === String(id)
   );
+
   if (!drink) return;
+
   if (!online) {
     state.bookings.unshift({
       id: crypto.randomUUID(),
@@ -529,12 +773,13 @@ async function book(id) {
       drink_name: drink.name,
       price: drink.price,
       created_at: new Date().toISOString(),
-      cancelled_at: null,
-      settlement_id: null
+      cancelled_at: null
     });
+
     showToast(`${drink.name} gebucht`);
     return;
   }
+
   const { error } = await db
     .from('bookings')
     .insert({
@@ -543,55 +788,81 @@ async function book(id) {
       drink_name: drink.name,
       price: drink.price
     });
+
   if (error) {
     console.error(error);
     showToast('Buchung fehlgeschlagen');
     return;
   }
-  await loadBookings();
+
+  await loadUserAccount();
   showToast(`${drink.name} gebucht`);
 }
-function canUndo(b) {
+
+function canUndo(booking) {
   if (
-    !b.created_at ||
-    b.cancelled_at ||
-    b.settlement_id
+    !booking.created_at ||
+    booking.cancelled_at
   ) {
     return false;
   }
+
   return (
     Date.now() -
-    new Date(b.created_at).getTime()
+    new Date(booking.created_at).getTime()
   ) <= 5 * 60 * 1000;
 }
+
 async function undoBooking(id) {
+  if (!online) {
+    const booking = state.bookings.find(
+      item => String(item.id) === String(id)
+    );
+
+    if (booking) {
+      booking.cancelled_at =
+        new Date().toISOString();
+    }
+
+    showToast('Buchung storniert');
+    return;
+  }
+
   const { error } = await db
     .from('bookings')
     .update({
       cancelled_at: new Date().toISOString()
     })
     .eq('id', id);
+
   if (error) {
     console.error(error);
     showToast('Stornierung fehlgeschlagen');
     return;
   }
-  await loadBookings();
+
+  await loadUserAccount();
   showToast('Buchung storniert');
 }
+
 /* =========================
    BENUTZER-PIN
 ========================= */
+
 function validPin(pin) {
   return /^\d{4}$/.test(pin);
 }
+
 function pinDialog(title, label, callback) {
   window.__pinCallback = callback;
+
   modal = `
     <div class="modal-wrap">
       <div class="modal">
+
         <h3>${esc(title)}</h3>
         <p>${esc(label)}</p>
+
         <input
           id="pinInput"
           class="pin-input"
@@ -601,195 +872,248 @@ function pinDialog(title, label, callback) {
           autocomplete="off"
           placeholder="••••"
         >
+
         <div class="modal-actions">
+
           <button
             class="secondary"
             onclick="closeModal()"
           >
             Abbrechen
           </button>
+
           <button onclick="submitPin()">
             OK
           </button>
+
         </div>
       </div>
     </div>
   `;
+
   render();
+
   setTimeout(() => {
     document.querySelector('#pinInput')?.focus();
   }, 50);
 }
+
 async function submitPin() {
   const pin =
     document.querySelector('#pinInput')?.value || '';
+
   if (!validPin(pin)) {
     showToast('Bitte vier Ziffern eingeben');
     return;
   }
+
   if (window.__pinCallback) {
     const close =
       await window.__pinCallback(pin);
+
     if (close !== false) {
       modal = null;
+      window.__pinCallback = null;
       render();
     }
   }
 }
+
 function closeModal() {
   modal = null;
   window.__pinCallback = null;
   render();
 }
+
 function setPin() {
+  if (!online) {
+    showToast('PIN ist offline nicht verfügbar');
+    return;
+  }
+
   pinDialog(
     'PIN festlegen',
     'Neue vierstellige PIN',
     async pin => {
       const pin_hash = await hashPin(pin);
+
       const { error } = await db
         .from('users')
         .update({ pin_hash })
         .eq('id', state.user.id);
+
       if (error) {
         console.error(error);
         showToast('PIN konnte nicht gespeichert werden');
         return false;
       }
+
       state.user.pin_hash = pin_hash;
       state.pinSet = true;
+
       showToast('PIN gespeichert');
       return true;
     }
   );
 }
+
 function changePin() {
   setPin();
 }
+
 function removePin() {
   modal = `
     <div class="modal-wrap">
       <div class="modal">
+
         <h3>PIN entfernen?</h3>
+
         <p>
           Das Konto ist danach wieder ohne PIN zugänglich.
         </p>
+
         <div class="modal-actions">
+
           <button
             class="secondary"
             onclick="closeModal()"
           >
             Abbrechen
           </button>
+
           <button onclick="confirmRemovePin()">
             PIN entfernen
           </button>
+
         </div>
       </div>
     </div>
   `;
+
   render();
 }
+
 async function confirmRemovePin() {
   const { error } = await db
     .from('users')
     .update({ pin_hash: null })
     .eq('id', state.user.id);
+
   if (error) {
     console.error(error);
     showToast('PIN konnte nicht entfernt werden');
     return;
   }
+
   state.user.pin_hash = null;
   state.pinSet = false;
   modal = null;
+
   showToast('PIN entfernt');
 }
+
 /* =========================
    ADMIN LOGIN
 ========================= */
+
 function openAdminLogin() {
   state.screen = 'admin-login';
   render();
 }
+
 function adminLoginScreen() {
   return `
     <section class="admin-login">
+
       <button
         class="back-button"
-        onclick="returnFromAdminLogin()"
+        onclick="backToUsers()"
       >
         ← Zurück
       </button>
+
       <div class="section-heading">
         <h1>Admin</h1>
         <div class="yellow-line"></div>
       </div>
+
       <p class="muted">
         Admin-PIN eingeben
       </p>
+
       <input
         id="adminPin"
         class="pin-input"
         type="password"
         inputmode="numeric"
         maxlength="12"
+        autocomplete="off"
         placeholder="PIN"
       >
+
       <button
         class="primary-button"
         onclick="checkAdminPin()"
       >
         Anmelden
       </button>
+
     </section>
   `;
 }
-function returnFromAdminLogin() {
-  state.screen = state.user ? 'app' : 'users';
-  render();
-}
+
 async function checkAdminPin() {
   const pin =
     document.querySelector('#adminPin')?.value || '';
+
   if (!pin) {
     showToast('PIN eingeben');
     return;
   }
-  const { data, error } =
-    await db.rpc('check_admin_pin', {
-      p_pin: pin
-    });
+
+  const { data, error } = await db.rpc(
+    'check_admin_pin',
+    { p_pin: pin }
+  );
+
   if (error) {
     console.error(error);
     showToast('Admin-Anmeldung fehlgeschlagen');
     return;
   }
+
   if (!data) {
     showToast('Admin-PIN ist falsch');
     return;
   }
-  state.adminUnlocked = true;
+
+  state.admin = true;
   state.screen = 'admin';
   state.adminTab = 'accounts';
+
   await Promise.all([
     loadUsers(),
     loadDrinks(),
+    loadSettings(),
     loadAdminData()
   ]);
+
   render();
 }
+
 function leaveAdmin() {
-  state.adminUnlocked = false;
-  state.screen = state.user ? 'app' : 'users';
+  state.admin = false;
+  state.screen = 'users';
   render();
 }
 /* =========================
-   ADMIN
+   ADMIN HAUPTBEREICH
 ========================= */
+
 function adminScreen() {
   return `
     <section class="admin-page">
+
       <div class="app-topline">
         <button
           class="back-button"
@@ -797,234 +1121,824 @@ function adminScreen() {
         >
           ← Zurück
         </button>
+
         <strong>Admin</strong>
       </div>
+
       <div class="admin-tabs">
+
         <button
           class="${state.adminTab === 'accounts' ? 'active' : ''}"
           onclick="setAdminTab('accounts')"
         >
           Konten
         </button>
+
         <button
-          class="${state.adminTab === 'settlements' ? 'active' : ''}"
-          onclick="setAdminTab('settlements')"
+          class="${state.adminTab === 'payments' ? 'active' : ''}"
+          onclick="setAdminTab('payments')"
         >
-          Abrechnungen
+          Zahlungen
         </button>
+
         <button
           class="${state.adminTab === 'drinks' ? 'active' : ''}"
           onclick="setAdminTab('drinks')"
         >
           Getränke
         </button>
+
         <button
           class="${state.adminTab === 'users' ? 'active' : ''}"
           onclick="setAdminTab('users')"
         >
           Benutzer
         </button>
+
+        <button
+          class="${state.adminTab === 'settings' ? 'active' : ''}"
+          onclick="setAdminTab('settings')"
+        >
+          Einstellungen
+        </button>
+
       </div>
+
       ${adminTabContent()}
+
     </section>
   `;
 }
+
 function setAdminTab(tab) {
   state.adminTab = tab;
   render();
 }
+
 function adminTabContent() {
   if (state.adminTab === 'accounts') {
     return adminAccounts();
   }
-  if (state.adminTab === 'settlements') {
-    return adminSettlements();
+
+  if (state.adminTab === 'payments') {
+    return adminPayments();
   }
+
   if (state.adminTab === 'drinks') {
     return adminDrinks();
   }
-  return adminUsers();
+
+  if (state.adminTab === 'users') {
+    return adminUsers();
+  }
+
+  return adminSettings();
 }
+
+/* =========================
+   ADMIN KONTEN
+========================= */
+
 function adminAccounts() {
-  const rows = state.users.map(user => {
-    const bookings = state.adminBookings.filter(
-      b =>
-        String(b.user_id) === String(user.id) &&
-        !b.cancelled_at &&
-        !b.settlement_id
-    );
-    const total = bookings.reduce(
-      (sum, b) => sum + Number(b.price || 0),
-      0
-    );
-    if (total <= 0) return '';
-    return `
-      <div class="admin-account-card">
-        <div>
-          <strong>${esc(user.name)}</strong>
-          <small>
-            ${bookings.length}
-            ${
-              bookings.length === 1
-                ? 'Buchung'
-                : 'Buchungen'
-            }
-          </small>
+  const rows = state.users
+    .map(user => {
+      const open = adminBalance(user.id);
+
+      if (open <= 0) {
+        return '';
+      }
+
+      return `
+        <div class="admin-account-card">
+
+          <div>
+            <strong>
+              ${esc(user.name)}
+            </strong>
+
+            <small>
+              Offener Betrag
+            </small>
+          </div>
+
+          <div class="admin-account-right">
+
+            <strong>
+              ${euro(open)}
+            </strong>
+
+            <button
+              onclick="openPayment('${user.id}')"
+            >
+              Zahlung
+            </button>
+
+          </div>
+
         </div>
-        <div class="admin-account-right">
-          <strong>${euro(total)}</strong>
-          <button
-            onclick="confirmSettlement('${user.id}')"
-          >
-            Bezahlt
-          </button>
-        </div>
-      </div>
-    `;
-  }).join('');
-  const grandTotal =
-    state.adminBookings
-      .filter(
-        b =>
-          !b.cancelled_at &&
-          !b.settlement_id
-      )
-      .reduce(
-        (sum, b) =>
-          sum + Number(b.price || 0),
-        0
-      );
+      `;
+    })
+    .join('');
+
+  const total = state.users.reduce(
+    (sum, user) =>
+      sum + adminBalance(user.id),
+    0
+  );
+
   return `
     <div class="admin-summary">
-      <small>Gesamt offen</small>
-      <strong>${euro(grandTotal)}</strong>
+
+      <small>
+        Insgesamt offen
+      </small>
+
+      <strong>
+        ${euro(total)}
+      </strong>
+
     </div>
+
     <div class="admin-list">
       ${
         rows ||
-        '<p class="muted">Keine offenen Konten.</p>'
+        '<p class="muted">Keine offenen Beträge.</p>'
       }
     </div>
   `;
 }
-function confirmSettlement(userId) {
+
+/* =========================
+   ZAHLUNG / TEILZAHLUNG
+========================= */
+
+function openPayment(userId) {
   const user = state.users.find(
-    u => String(u.id) === String(userId)
+    item =>
+      String(item.id) ===
+      String(userId)
   );
+
   if (!user) return;
-  const bookings =
-    state.adminBookings.filter(
-      b =>
-        String(b.user_id) === String(userId) &&
-        !b.cancelled_at &&
-        !b.settlement_id
-    );
-  const total = bookings.reduce(
-    (sum, b) => sum + Number(b.price || 0),
-    0
-  );
-  if (total <= 0) return;
+
+  const open = adminBalance(userId);
+
   modal = `
     <div class="modal-wrap">
+
       <div class="modal">
-        <h3>Als bezahlt markieren?</h3>
+
+        <h3>Zahlung erfassen</h3>
+
         <p>
-          ${esc(user.name)}<br>
-          <strong>${euro(total)}</strong>
+          ${esc(user.name)}
         </p>
-        <p class="muted">
-          ${bookings.length} Buchungen werden
-          dieser Abrechnung dauerhaft zugeordnet.
-          Die Buchungen werden nicht gelöscht.
-        </p>
+
+        <div class="payment-open">
+          Offen:
+          <strong>${euro(open)}</strong>
+        </div>
+
+        <label class="field-label">
+          Gezahlter Betrag
+        </label>
+
+        <input
+          id="paymentAmount"
+          class="admin-input"
+          type="text"
+          inputmode="decimal"
+          value="${open.toFixed(2).replace('.', ',')}"
+        >
+
+        <label class="field-label">
+          Zahlungsart
+        </label>
+
+        <select
+          id="paymentMethod"
+          class="admin-input"
+        >
+          <option value="PayPal">
+            PayPal
+          </option>
+
+          <option value="Bar">
+            Bar
+          </option>
+
+          <option value="Überweisung">
+            Überweisung
+          </option>
+
+          <option value="Sonstiges">
+            Sonstiges
+          </option>
+        </select>
+
+        <label class="field-label">
+          Notiz – optional
+        </label>
+
+        <input
+          id="paymentNote"
+          class="admin-input"
+          type="text"
+          placeholder="z. B. Teilzahlung"
+        >
+
         <div class="modal-actions">
+
           <button
             class="secondary"
             onclick="closeModal()"
           >
             Abbrechen
           </button>
+
           <button
-            onclick="settleUser('${userId}')"
+            onclick="savePayment('${userId}')"
           >
-            Bezahlt
+            Verbuchen
           </button>
+
         </div>
+
       </div>
+
     </div>
   `;
+
   render();
 }
-async function settleUser(userId) {
-  const { error } = await db.rpc(
-    'settle_user',
-    { p_user_id: userId }
+
+async function savePayment(userId) {
+  const amountText =
+    document.querySelector('#paymentAmount')?.value || '';
+
+  const amount = Number(
+    amountText
+      .replace(',', '.')
+      .trim()
   );
-  if (error) {
-    console.error(error);
-    showToast('Abrechnung konnte nicht gespeichert werden');
+
+  const method =
+    document.querySelector('#paymentMethod')?.value ||
+    'Sonstiges';
+
+  const note =
+    document.querySelector('#paymentNote')?.value?.trim() ||
+    null;
+
+  const open = adminBalance(userId);
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    showToast('Bitte einen gültigen Betrag eingeben');
     return;
   }
+
+  if (amount > open + 0.001) {
+    showToast('Der Betrag ist höher als der offene Betrag');
+    return;
+  }
+
+  const { error } = await db
+    .from('settlements')
+    .insert({
+      user_id: userId,
+      total: amount,
+      payment_method: method,
+      note
+    });
+
+  if (error) {
+    console.error(error);
+    showToast('Zahlung konnte nicht gespeichert werden');
+    return;
+  }
+
   modal = null;
+
   await loadAdminData();
+
   if (
     state.user &&
     String(state.user.id) === String(userId)
   ) {
-    await loadBookings();
+    await loadUserAccount();
   }
-  showToast('Als bezahlt verbucht');
+
+  showToast(
+    amount < open - 0.001
+      ? 'Teilzahlung verbucht'
+      : 'Vollständig bezahlt'
+  );
 }
-function adminSettlements() {
-  if (!state.settlements.length) {
+
+/* =========================
+   ZAHLUNGSHISTORIE
+========================= */
+
+function adminPayments() {
+  if (!state.adminSettlements.length) {
     return `
       <p class="muted">
-        Noch keine Abrechnungen vorhanden.
+        Noch keine Zahlungen vorhanden.
       </p>
     `;
   }
+
+  const total = state.adminSettlements.reduce(
+    (sum, payment) =>
+      sum + Number(payment.total || 0),
+    0
+  );
+
+  const rows = state.adminSettlements
+    .map(payment => {
+      const user = state.users.find(
+        item =>
+          String(item.id) ===
+          String(payment.user_id)
+      );
+
+      return `
+        <div class="admin-payment-row">
+
+          <div>
+            <strong>
+              ${esc(user?.name || 'Unbekannter Benutzer')}
+            </strong>
+
+            <small>
+              ${formatDate(payment.settled_at)}
+              ·
+              ${esc(payment.payment_method || 'Sonstiges')}
+            </small>
+
+            ${
+              payment.note
+                ? `
+                  <small>
+                    ${esc(payment.note)}
+                  </small>
+                `
+                : ''
+            }
+          </div>
+
+          <strong>
+            ${euro(payment.total)}
+          </strong>
+
+        </div>
+      `;
+    })
+    .join('');
+
   return `
-    <div class="settlement-list">
-      ${state.settlements.map(s => {
-        const user = state.users.find(
-          u => String(u.id) === String(s.user_id)
-        );
-        const items =
-          state.adminBookings.filter(
-            b =>
-              String(b.settlement_id) ===
-              String(s.id)
-          );
-        const summary = {};
-        items.forEach(b => {
-          const key =
-            b.drink_name || 'Getränk';
-          if (!summary[key]) {
-            summary[key] = {
-              count: 0,
-              total: 0
-            };
-          }
-          summary[key].count += 1;
-          summary[key].total +=
-            Number(b.price || 0);
-        });
-        const details =
-          Object.entries(summary)
-            .map(([name, info]) => `
-              <div class="settlement-item">
-                <span>
-                  ${info.count} × ${esc(name)}
-                </span>
-                <strong>
-                  ${euro(info.total)}
-                </strong>
-              </div>
-            `)
-            .join('');
-        return `
-          <details class="settlement-card">
-            <summary>
-              <div>
-                <strong>
-                  ${esc(user?.name || 'Benutzer
+    <div class="admin-summary">
+      <small>
+        Erfasste Zahlungen
+      </small>
+
+      <strong>
+        ${euro(total)}
+      </strong>
+    </div>
+
+    <div class="admin-list">
+      ${rows}
+    </div>
+  `;
+}
+
+/* =========================
+   ADMIN GETRÄNKE
+========================= */
+
+function adminDrinks() {
+  const rows = state.drinks
+    .map(drink => `
+      <div class="admin-row">
+
+        <div>
+          <strong>
+            ${esc(drink.icon || '🥤')}
+            ${esc(drink.name)}
+          </strong>
+
+          <small>
+            ${euro(drink.price)}
+            ·
+            ${
+              drink.active === false
+                ? 'inaktiv'
+                : 'aktiv'
+            }
+          </small>
+        </div>
+
+        <div class="admin-row-actions">
+
+          <button
+            onclick="editDrink('${drink.id}')"
+            title="Bearbeiten"
+          >
+            ✏️
+          </button>
+
+          <button
+            onclick="toggleDrink('${drink.id}')"
+            title="Aktiv/Inaktiv"
+          >
+            ${
+              drink.active === false
+                ? '▶'
+                : '⏸'
+            }
+          </button>
+
+        </div>
+
+      </div>
+    `)
+    .join('');
+
+  return `
+    <div class="admin-section-head">
+
+      <h3>Getränke</h3>
+
+      <button onclick="addDrink()">
+        + Getränk
+      </button>
+
+    </div>
+
+    <div class="admin-list">
+      ${rows}
+    </div>
+  `;
+}
+
+async function addDrink() {
+  const name = prompt(
+    'Name des Getränks:'
+  );
+
+  if (!name?.trim()) return;
+
+  const priceText = prompt(
+    'Preis, z. B. 1,00:'
+  );
+
+  if (!priceText) return;
+
+  const price = Number(
+    priceText.replace(',', '.')
+  );
+
+  if (!Number.isFinite(price)) {
+    showToast('Ungültiger Preis');
+    return;
+  }
+
+  const icon =
+    prompt('Emoji:', '🥤') || '🥤';
+
+  const { error } = await db
+    .from('drinks')
+    .insert({
+      name: name.trim(),
+      price,
+      icon,
+      active: true
+    });
+
+  if (error) {
+    console.error(error);
+    showToast('Getränk konnte nicht angelegt werden');
+    return;
+  }
+
+  await loadDrinks();
+
+  showToast('Getränk angelegt');
+}
+
+async function editDrink(id) {
+  const drink = state.drinks.find(
+    item =>
+      String(item.id) === String(id)
+  );
+
+  if (!drink) return;
+
+  const name = prompt(
+    'Getränkename:',
+    drink.name
+  );
+
+  if (!name?.trim()) return;
+
+  const priceText = prompt(
+    'Preis:',
+    String(drink.price).replace('.', ',')
+  );
+
+  if (!priceText) return;
+
+  const price = Number(
+    priceText.replace(',', '.')
+  );
+
+  if (!Number.isFinite(price)) {
+    showToast('Ungültiger Preis');
+    return;
+  }
+
+  const icon =
+    prompt(
+      'Emoji:',
+      drink.icon || '🥤'
+    ) || '🥤';
+
+  const { error } = await db
+    .from('drinks')
+    .update({
+      name: name.trim(),
+      price,
+      icon
+    })
+    .eq('id', id);
+
+  if (error) {
+    console.error(error);
+    showToast('Getränk konnte nicht geändert werden');
+    return;
+  }
+
+  await loadDrinks();
+
+  showToast('Getränk geändert');
+}
+
+async function toggleDrink(id) {
+  const drink = state.drinks.find(
+    item =>
+      String(item.id) === String(id)
+  );
+
+  if (!drink) return;
+
+  const active =
+    drink.active === false;
+
+  const { error } = await db
+    .from('drinks')
+    .update({ active })
+    .eq('id', id);
+
+  if (error) {
+    console.error(error);
+    showToast('Status konnte nicht geändert werden');
+    return;
+  }
+
+  await loadDrinks();
+
+  showToast(
+    active
+      ? 'Getränk aktiviert'
+      : 'Getränk deaktiviert'
+  );
+}
+
+/* =========================
+   ADMIN BENUTZER
+========================= */
+
+function adminUsers() {
+  const rows = state.users
+    .map(user => `
+      <div class="admin-row">
+
+        <div>
+          <strong>
+            ${esc(user.name)}
+          </strong>
+
+          <small>
+            ${
+              user.pin_hash
+                ? 'PIN eingerichtet'
+                : 'Keine PIN'
+            }
+          </small>
+        </div>
+
+        <div class="admin-row-actions">
+
+          <button
+            onclick="renameUser('${user.id}')"
+            title="Name ändern"
+          >
+            ✏️
+          </button>
+
+          <button
+            onclick="resetUserPin('${user.id}')"
+            title="PIN entfernen"
+          >
+            🔑
+          </button>
+
+        </div>
+
+      </div>
+    `)
+    .join('');
+
+  return `
+    <div class="admin-section-head">
+
+      <h3>Benutzer</h3>
+
+      <button onclick="addUser()">
+        + Benutzer
+      </button>
+
+    </div>
+
+    <div class="admin-list">
+      ${rows}
+    </div>
+  `;
+}
+
+async function addUser() {
+  const name = prompt(
+    'Name des neuen Benutzers:'
+  );
+
+  if (!name?.trim()) return;
+
+  const { error } = await db
+    .from('users')
+    .insert({
+      name: name.trim()
+    });
+
+  if (error) {
+    console.error(error);
+    showToast('Benutzer konnte nicht angelegt werden');
+    return;
+  }
+
+  await loadUsers();
+
+  showToast('Benutzer angelegt');
+}
+
+async function renameUser(id) {
+  const user = state.users.find(
+    item =>
+      String(item.id) === String(id)
+  );
+
+  if (!user) return;
+
+  const name = prompt(
+    'Name ändern:',
+    user.name
+  );
+
+  if (!name?.trim()) return;
+
+  const { error } = await db
+    .from('users')
+    .update({
+      name: name.trim()
+    })
+    .eq('id', id);
+
+  if (error) {
+    console.error(error);
+    showToast('Name konnte nicht geändert werden');
+    return;
+  }
+
+  await loadUsers();
+
+  showToast('Name geändert');
+}
+
+async function resetUserPin(id) {
+  if (
+    !confirm(
+      'PIN dieses Benutzers wirklich entfernen?'
+    )
+  ) {
+    return;
+  }
+
+  const { error } = await db
+    .from('users')
+    .update({
+      pin_hash: null
+    })
+    .eq('id', id);
+
+  if (error) {
+    console.error(error);
+    showToast('PIN konnte nicht entfernt werden');
+    return;
+  }
+
+  await loadUsers();
+
+  showToast('PIN entfernt');
+}
+
+/* =========================
+   ADMIN EINSTELLUNGEN
+========================= */
+
+function adminSettings() {
+  return `
+    <div class="settings-card">
+
+      <h3>PayPal</h3>
+
+      <p class="muted">
+        Hier kannst du den PayPal-Zahlungslink
+        für alle Benutzer ändern.
+      </p>
+
+      <label class="field-label">
+        PayPal-Zahlungslink
+      </label>
+
+      <input
+        id="paypalUrl"
+        class="admin-input"
+        type="url"
+        placeholder="https://..."
+        value="${esc(state.paypalUrl)}"
+      >
+
+      <button
+        class="primary-button"
+        onclick="savePaypalUrl()"
+      >
+        PayPal-Link speichern
+      </button>
+
+    </div>
+  `;
+}
+
+async function savePaypalUrl() {
+  const url =
+    document.querySelector('#paypalUrl')
+      ?.value
+      ?.trim() || '';
+
+  if (
+    url &&
+    !/^https?:\/\//i.test(url)
+  ) {
+    showToast(
+      'Bitte einen vollständigen Link eingeben'
+    );
+    return;
+  }
+
+  const { error } = await db
+    .from('admin_settings')
+    .update({
+      paypal_url: url || null,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', 1);
+
+  if (error) {
+    console.error(error);
+    showToast('PayPal-Link konnte nicht gespeichert werden');
+    return;
+  }
+
+  state.paypalUrl = url;
+
+  showToast('PayPal-Link gespeichert');
+}
+
+/* =========================
+   START
+========================= */
+
+init();
