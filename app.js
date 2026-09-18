@@ -275,8 +275,7 @@ function paymentTotal(payments) {
 }
 
 function userBalance() {
-  return Math.max(
-    0,
+  return (
     bookingTotal(state.bookings) -
       paymentTotal(state.settlements)
   );
@@ -293,8 +292,7 @@ function adminBalance(userId) {
       String(payment.user_id) === String(userId)
   );
 
-  return Math.max(
-    0,
+  return (
     bookingTotal(bookings) -
       paymentTotal(payments)
   );
@@ -628,33 +626,45 @@ function accountApp() {
 
       <h2>Dein Konto</h2>
 
-      <div class="balance-card">
-        <small>Offener Betrag</small>
+     <div class="balance-card ${total < 0 ? 'credit' : ''}">
+  <small>
+    ${total < 0 ? 'Dein Guthaben' : 'Offener Betrag'}
+  </small>
+
+  <strong>
+    ${total < 0 ? '+ ' + euro(Math.abs(total)) : euro(total)}
+  </strong>
+</div>
+
+    ${
+  total > 0
+    ? `
+      <button
+        class="paypal-button"
+        onclick="openPaypal()"
+      >
+        <span>Mit PayPal bezahlen</span>
         <strong>${euro(total)}</strong>
-      </div>
+      </button>
 
-      ${
-        total > 0
-          ? `
-            <button
-              class="paypal-button"
-              onclick="openPaypal()"
-            >
-              <span>Mit PayPal bezahlen</span>
-              <strong>${euro(total)}</strong>
-            </button>
-
-            <p class="payment-note">
-              Auch Teilzahlungen sind möglich.
-              Der Admin verbucht die Zahlung anschließend.
-            </p>
-          `
-          : `
-            <div class="paid-up">
-              ✓ Aktuell ist nichts offen.
-            </div>
-          `
-      }
+      <p class="payment-note">
+        Auch Teilzahlungen sind möglich.
+        Der Admin verbucht die Zahlung anschließend.
+      </p>
+    `
+    : total < 0
+      ? `
+        <div class="paid-up">
+          ✓ Dein Guthaben wird automatisch mit
+          zukünftigen Getränken verrechnet.
+        </div>
+      `
+      : `
+        <div class="paid-up">
+          ✓ Aktuell ist nichts offen.
+        </div>
+      `
+}
 
       <div class="account-actions">
         ${
@@ -1234,7 +1244,7 @@ function adminAccounts() {
     .map(user => {
       const open = adminBalance(user.id);
 
-      if (open <= 0) {
+      if Math.abs(open) < 0.001) {
         return '';
       }
 
@@ -1247,21 +1257,30 @@ function adminAccounts() {
             </strong>
 
             <small>
-              Offener Betrag
+              ${open < 0 ? 'Guthaben' : 'Offener Betrag'}
             </small>
           </div>
 
           <div class="admin-account-right">
 
             <strong>
-              ${euro(open)}
+              ${open < 0 ? '+ ' + euro(Math.abs(open)) : euro(open)}
             </strong>
-
-            <button
-              onclick="openPayment('${user.id}')"
-            >
-              Zahlung
-            </button>
+${
+  open > 0
+    ? `
+      <button
+        onclick="openPayment('${user.id}')"
+      >
+        Zahlung
+      </button>
+    `
+    : `
+      <span class="credit-label">
+        Guthaben
+      </span>
+    `
+}
 
           </div>
 
@@ -1271,10 +1290,12 @@ function adminAccounts() {
     .join('');
 
   const total = state.users.reduce(
-    (sum, user) =>
-      sum + adminBalance(user.id),
-    0
-  );
+  (sum, user) => {
+    const balance = adminBalance(user.id);
+    return sum + Math.max(0, balance);
+  },
+  0
+);
 
   return `
     <div class="admin-summary">
@@ -1427,11 +1448,6 @@ async function savePayment(userId) {
     amount <= 0
   ) {
     showToast('Bitte einen gültigen Betrag eingeben');
-    return;
-  }
-
-  if (amount > open + 0.001) {
-    showToast('Der Betrag ist höher als der offene Betrag');
     return;
   }
 
