@@ -561,10 +561,12 @@ h3{
 .admin-login{
   
 /* Getränkebilder */
-.drink-image {
-  width: 100%;
-  height: 110px;
-  object-fit: contain;
+.drink .drink-image {
+  width: 70px !important;
+  height: 70px !important;
+  max-width: 70px !important;
+  max-height: 70px !important;
+  object-fit: contain !important;
   display: block;
-  margin: 0 auto 10px;
+  margin: 0 auto 8px;
 }
