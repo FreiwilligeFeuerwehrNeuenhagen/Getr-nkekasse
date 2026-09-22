@@ -1,1 +1,17 @@
-{"name":"Getränkekasse","short_name":"Getränke","start_url":"./","display":"standalone","background_color":"#050706","theme_color":"#050706","lang":"de"}
+{
+  "name": "Getränkeliste – Feuerwehr Neuenhagen",
+  "short_name": "Getränkeliste",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#050706",
+  "theme_color": "#050706",
+  "lang": "de",
+  "icons": [
+    {
+      "src": "./app-icon.PNG",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
