@@ -814,6 +814,7 @@ async function confirmBooking(id) {
     state.bookings.unshift({
       id: crypto.randomUUID(),
       user_id: state.user.id,
+      user_name: state.user.name,
       drink_id: drink.id,
       drink_name: drink.name,
       price: drink.price,
@@ -1451,14 +1452,19 @@ async function savePayment(userId) {
     return;
   }
 
-  const { error } = await db
-    .from('settlements')
-    .insert({
-      user_id: userId,
-      total: amount,
-      payment_method: method,
-      note
-    });
+  const user = state.users.find(
+  item => String(item.id) === String(userId)
+);
+const { error } = await db
+  .from('settlements')
+  .insert({
+    user_id: userId,
+    user_name: user?.name || null,
+    total: amount,
+    payment_method: method,
+    note
+  });
+
 
   if (error) {
     console.error(error);
@@ -1516,8 +1522,8 @@ function adminPayments() {
 
           <div>
             <strong>
-              ${esc(user?.name || 'Unbekannter Benutzer')}
-            </strong>
+  ${esc(user?.name || payment.user_name || 'Gelöschter Benutzer')}
+</strong>
 
             <small>
               ${formatDate(payment.settled_at)}
@@ -1598,15 +1604,11 @@ function adminDrinks() {
           </button>
 
           <button
-            onclick="toggleDrink('${drink.id}')"
-            title="Aktiv/Inaktiv"
-          >
-            ${
-              drink.active === false
-                ? '▶'
-                : '⏸'
-            }
-          </button>
+  onclick="deleteDrink('${drink.id}')"
+  title="Getränk löschen"
+>
+  🗑️
+</button>
 
         </div>
 
@@ -1732,36 +1734,34 @@ async function editDrink(id) {
 
   showToast('Getränk geändert');
 }
-
-async function toggleDrink(id) {
+async function deleteDrink(id) {
   const drink = state.drinks.find(
-    item =>
-      String(item.id) === String(id)
+    item => String(item.id) === String(id)
   );
 
   if (!drink) return;
 
-  const active =
-    drink.active === false;
+  const confirmed = confirm(
+    `${drink.name} wirklich löschen?\n\n` +
+    `Frühere Buchungen bleiben in der Historie erhalten.`
+  );
+
+  if (!confirmed) return;
 
   const { error } = await db
     .from('drinks')
-    .update({ active })
+    .delete()
     .eq('id', id);
 
   if (error) {
     console.error(error);
-    showToast('Status konnte nicht geändert werden');
+    showToast('Getränk konnte nicht gelöscht werden');
     return;
   }
 
   await loadDrinks();
 
-  showToast(
-    active
-      ? 'Getränk aktiviert'
-      : 'Getränk deaktiviert'
-  );
+  showToast(`${drink.name} gelöscht`);
 }
 
 /* =========================
@@ -1802,6 +1802,13 @@ function adminUsers() {
           >
             🔑
           </button>
+          
+          <button
+  onclick="deleteUser('${user.id}')"
+  title="Benutzer löschen"
+>
+  🗑️
+</button>
 
         </div>
 
@@ -1908,6 +1915,87 @@ async function resetUserPin(id) {
   await loadUsers();
 
   showToast('PIN entfernt');
+}
+async function deleteUser(id) {
+  const user = state.users.find(
+    item => String(item.id) === String(id)
+  );
+
+  if (!user) return;
+
+  // Aktuellen Kontostand direkt aus der Datenbank prüfen
+  const [bookingsResult, settlementsResult] =
+    await Promise.all([
+      db
+        .from('bookings')
+        .select('price, cancelled_at')
+        .eq('user_id', id),
+
+      db
+        .from('settlements')
+        .select('total')
+        .eq('user_id', id)
+    ]);
+
+  if (bookingsResult.error || settlementsResult.error) {
+    console.error(
+      bookingsResult.error ||
+      settlementsResult.error
+    );
+
+    showToast('Kontostand konnte nicht geprüft werden');
+    return;
+  }
+
+  const booked = bookingTotal(
+    bookingsResult.data || []
+  );
+
+  const paid = paymentTotal(
+    settlementsResult.data || []
+  );
+
+  const balance = booked - paid;
+
+  // Weder Schulden noch Guthaben dürfen vorhanden sein
+  if (Math.abs(balance) >= 0.001) {
+    if (balance > 0) {
+      showToast(
+        `Löschen nicht möglich: ${euro(balance)} offen`
+      );
+    } else {
+      showToast(
+        `Löschen nicht möglich: ${euro(Math.abs(balance))} Guthaben`
+      );
+    }
+
+    return;
+  }
+
+  const confirmed = confirm(
+    `${user.name} wirklich löschen?\n\n` +
+    `Der Kontostand beträgt 0,00 €.`
+  );
+
+  if (!confirmed) return;
+
+  const { error } = await db
+    .from('users')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error(error);
+    showToast('Benutzer konnte nicht gelöscht werden');
+    return;
+  }
+
+  await Promise.all([
+  loadUsers(),
+  loadAdminData()
+]);
+showToast(`${user.name} gelöscht`);
+
 }
 
 /* =========================
