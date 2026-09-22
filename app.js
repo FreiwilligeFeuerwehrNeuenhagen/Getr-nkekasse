@@ -509,9 +509,22 @@ function accountApp() {
         class="drink"
         onclick="book('${drink.id}')"
       >
-        <span class="drink-icon">
-          ${esc(drink.icon || '🥤')}
-        </span>
+        ${
+  drink.image_url
+    ? `
+      <img
+        class="drink-image"
+        src="${esc(drink.image_url)}"
+        alt="${esc(drink.name)}"
+      >
+    `
+    : `
+      <span class="drink-icon">
+        ${esc(drink.icon || '🥤')}
+      </span>
+    `
+}
+
 
         <strong>${esc(drink.name)}</strong>
         <b>${euro(drink.price)}</b>
