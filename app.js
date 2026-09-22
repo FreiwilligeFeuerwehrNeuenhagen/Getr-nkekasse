@@ -1670,15 +1670,23 @@ async function addDrink() {
 
   const icon =
     prompt('Emoji:', '🥤') || '🥤';
+  const imageUrl = prompt(
+  'Bild-URL (optional):',
+  ''
+);
+
+if (imageUrl === null) return;
 
   const { error } = await db
     .from('drinks')
     .insert({
-      name: name.trim(),
-      price,
-      icon,
-      active: true
-    });
+  name: name.trim(),
+  price,
+  icon,
+  image_url: imageUrl.trim() || null,
+  active: true
+});
+
 
   if (error) {
     console.error(error);
@@ -1727,14 +1735,21 @@ async function editDrink(id) {
       'Emoji:',
       drink.icon || '🥤'
     ) || '🥤';
+  const imageUrl = prompt(
+  'Bild-URL (optional):',
+  drink.image_url || ''
+);
+if (imageUrl === null) return;
 
   const { error } = await db
     .from('drinks')
     .update({
-      name: name.trim(),
-      price,
-      icon
-    })
+  name: name.trim(),
+  price,
+  icon,
+  image_url: imageUrl.trim() || null
+})
+
     .eq('id', id);
 
   if (error) {
