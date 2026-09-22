@@ -851,7 +851,7 @@ function canUndo(booking) {
   return (
     Date.now() -
     new Date(booking.created_at).getTime()
-  ) <= 5 * 60 * 1000;
+  ) <= 1 * 60 * 1000;
 }
 
 async function undoBooking(id) {
